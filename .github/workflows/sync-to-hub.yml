@@ -20,8 +20,8 @@ jobs:
         uses: huggingface/hub-sync@v0.1.0
         with:
           github_repo_id: ${{ github.repository }}
-          # ⚠️ ЗАМЕНИ със своите: твоето-потребителско-име/име-на-space
-          huggingface_repo_id: ВАШЕТО_HF_ИМЕ/zop-extractor
+          # ⚠️
+          huggingface_repo_id: givomir/zop-extractor
           repo_type: space
           space_sdk: gradio
           hf_token: ${{ secrets.HF_TOKEN }}
