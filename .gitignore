@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Тайни — НИКОГА не качвай токени
+.env
+*.token
+secrets.*
+
+# Временни файлове от обработката
+uploads/
+zop_*/
+*.tmp
+
+# Gradio кеш
+gradio_cached_examples/
+flagged/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Тестове (по желание — ако не искаш да ги качваш)
+test_*.py
+probe_*.py
+debug*.py

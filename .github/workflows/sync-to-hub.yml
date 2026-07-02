@@ -1,0 +1,27 @@
+name: Sync to Hugging Face Hub
+
+# Автоматичен deploy към HuggingFace Space при всеки push към main.
+# Използва официалния huggingface/hub-sync action, който качва файловете
+# през hf CLI и автоматично изключва .github/ и .git/ папките.
+
+on:
+  push:
+    branches: [main]
+  # Позволява и ръчно стартиране от раздела Actions в GitHub
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync to Hugging Face Space
+        uses: huggingface/hub-sync@v0.1.0
+        with:
+          github_repo_id: ${{ github.repository }}
+          # ⚠️ ЗАМЕНИ със своите: твоето-потребителско-име/име-на-space
+          huggingface_repo_id: ВАШЕТО_HF_ИМЕ/zop-extractor
+          repo_type: space
+          space_sdk: gradio
+          hf_token: ${{ secrets.HF_TOKEN }}
