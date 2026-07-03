@@ -56,6 +56,15 @@ def _format_value(val) -> str:
 def _results_to_markdown(result: dict) -> str:
     """Превръща резултата в четим Markdown."""
     lines = ["## Извлечена информация\n"]
+
+    # Линк към поръчката (най-отгоре, за референция)
+    link = result.get("линк")
+    if link:
+        lines.append(f"🔗 **Линк към поръчката:** [{link}]({link})")
+    else:
+        lines.append("🔗 **Линк към поръчката:** _не е предоставен_")
+    lines.append("")
+
     for key, label in FIELD_LABELS:
         val = result.get(key)
         lines.append(f"### {label}")
