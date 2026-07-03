@@ -674,14 +674,97 @@ def merge_results(results: list[dict], use_voting: bool = False) -> dict:
     return merged
 
 
+# ── Целенасочено доизвличане на "трудни" полета ──────────────────────────────
+# Някои полета (особено в структурирани eForms обявления) се пропускат при
+# общото извличане, защото моделът се дави в шума от десетки други полета.
+# За тях правим ОТДЕЛНА, фокусирана заявка, която търси САМО едно поле.
+
+FOCUSED_PROMPTS = {
+    "краен_срок_за_подаване": (
+        "Намери КРАЙНАТА ДАТА за подаване/получаване на оферти в документа. "
+        "В структурираните обявления е под етикет \"Краен срок за получаване на "
+        "оферти(BT-131(d)-Lot)\" и датата е на СЛЕДВАЩИЯ ред. "
+        "НЕ връщай \"Краен срок за валидност на офертата(BT-98-Lot)\" (той е в месеци). "
+        "Върни само JSON: {{\"краен_срок_за_подаване\": \"стойност или null\"}}"
+    ),
+    "критерии_за_подбор": (
+        "Намери КРИТЕРИИТЕ ЗА ПОДБОР (изисквания към участниците: опит, оборот, "
+        "персонал, сертификати, технически способности). В структурираните обявления "
+        "са под \"Критерии за подбор(BT-809-Lot)\" и \"Описание(BT-750-Lot)\". "
+        "Ако изрично пише, че възложителят НЕ поставя изисквания — върни null. "
+        "Ако има конкретни изисквания — извлечи ги ДОСЛОВНО като списък. "
+        "Върни само JSON: {{\"критерии_за_подбор\": [\"...\"] или null}}"
+    ),
+    "критерии_за_възлагане": (
+        "Намери КРИТЕРИИТЕ ЗА ВЪЗЛАГАНЕ (оценъчните критерии за класиране на офертите). "
+        "В структурираните обявления са под \"Критерии за възлагане\" / \"Вид(BT-539-Lot)\". "
+        "Ако видът е само \"Цена\" — върни [\"Цена\"]. Ако има показатели с тежести — "
+        "копирай ги ДОСЛОВНО. НЕ измисляй точки/проценти. "
+        "Върни само JSON: {{\"критерии_за_възлагане\": [\"...\"]}}"
+    ),
+}
+
+# Полета, за които си струва фокусирано доизвличане, ако липсват след общото.
+FOCUSED_FIELDS = list(FOCUSED_PROMPTS.keys())
+
+
+def _find_relevant_chunk(chunks: list[str], field: str) -> str:
+    """
+    Избира чънка, който най-вероятно съдържа даденото поле, по ключови думи.
+    Така фокусираната заявка гледа само най-обещаващия текст, не целия документ.
+    """
+    keywords = {
+        "краен_срок_за_подаване": ["bt-131", "краен срок за получаване", "получаване на оферти"],
+        "критерии_за_подбор": ["bt-809", "bt-750", "критерии за подбор", "критерий за подбор"],
+        "критерии_за_възлагане": ["bt-539", "критерии за възлагане", "критерий за възлагане"],
+    }.get(field, [])
+
+    best, best_score = None, 0
+    for c in chunks:
+        low = c.lower()
+        score = sum(low.count(k) for k in keywords)
+        if score > best_score:
+            best, best_score = c, score
+    return best if best_score > 0 else None
+
+
+def focused_extract(filename: str, text: str, field: str) -> object:
+    """Едно фокусирано повикване за конкретно поле. Връща стойността или None."""
+    chunks = split_into_chunks(text)
+    chunk = _find_relevant_chunk(chunks, field)
+    if not chunk:
+        return None
+
+    instruction = FOCUSED_PROMPTS[field]
+    messages = [
+        {"role": "system", "content": "Ти извличаш едно конкретно поле от документ за обществена поръчка и връщаш само валиден JSON."},
+        {"role": "user", "content": f"{instruction}\n\nДОКУМЕНТ:\n---\n{chunk}\n---"},
+    ]
+    try:
+        if LLM_BACKEND == "hf":
+            raw = _call_hf(messages)
+        else:
+            raw = _call_ollama(messages)
+        parsed = parse_json_response(raw)
+        val = parsed.get(field)
+        if field in ("критерии_за_подбор", "критерии_за_възлагане"):
+            val = normalize_criteria_list(val)
+        return val if is_valid_value(val, field) else None
+    except Exception as e:
+        logger.warning(f"  ! Фокусирано извличане за {field} се провали: {e}")
+        return None
+
+
 def process_documents(filepaths: list[str], url: str = None) -> dict:
     all_results = []
+    doc_texts = {}  # пазим текстовете за евентуално доизвличане
 
     for fp in filepaths:
         filename = Path(fp).name
         try:
             text = read_document(fp)
             logger.info(f"Прочетен: {filename} ({len(text)} символа)")
+            doc_texts[filename] = text
             result = extract_from_single_doc(filename, text)
             if result:
                 all_results.append(result)
@@ -692,6 +775,20 @@ def process_documents(filepaths: list[str], url: str = None) -> dict:
         raise ExtractorError("Не може да се извлече информация от нито един документ.")
 
     final = merge_results(all_results, use_voting=True)
+
+    # Целенасочено доизвличане: за всяко "трудно" поле, което е останало празно,
+    # правим фокусирана заявка върху най-обещаващия документ.
+    for field in FOCUSED_FIELDS:
+        if is_valid_value(final.get(field), field):
+            continue  # вече го имаме
+        logger.info(f"  ⟳ Фокусирано доизвличане за: {field}")
+        for filename, text in doc_texts.items():
+            val = focused_extract(filename, text, field)
+            if is_valid_value(val, field):
+                final[field] = val
+                logger.info(f"    ✓ {field} намерено в {filename}")
+                break
+
     final["линк"] = url.strip() if url and url.strip() else None
 
     return final
